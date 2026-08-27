@@ -120,7 +120,10 @@ async def process_token_input(message: Message, state: FSMContext):
     
     if not token or len(token) < 15 or token.startswith("eyJ"):
         await message.answer(
-            "❌ Это не токен продавца. Отправьте значение **accessToken**:\n`4PgeDPAvPSEzgmV62Wgvwx-8UWE`",
+            "❌ **Это не токен продавца Uzum Seller.**\n\n"
+            "Вы отправили токен покупателя (`eyJ...`) или неверный формат.\n"
+            "Нужен токен продавца **`accessToken`** (из `seller.uzum.uz`, около 27 символов, например `XyZ123...`).\n\n"
+            "👉 Найдите в Cookies `seller.uzum.uz` строку **accessToken** или в Network в запросе `check_token` скопируйте `token`.",
             parse_mode="Markdown"
         )
         return

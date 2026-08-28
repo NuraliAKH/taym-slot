@@ -1,11 +1,11 @@
 import json
 import aiosqlite
 from typing import Optional, List, Dict, Any
-from config import DB_PATH
+import config
 
 async def init_db():
     """Initializes the database schema."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -35,7 +35,7 @@ async def init_db():
         await db.commit()
 
 async def save_user(user_id: int, token: str, seller_id: int, phone_number: str, shops: List[Dict[str, Any]], selected_shop_id: Optional[int] = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.DB_PATH) as db:
         if selected_shop_id is None and shops:
             selected_shop_id = shops[0].get("id") or shops[0].get("shopId")
 
@@ -53,7 +53,7 @@ async def save_user(user_id: int, token: str, seller_id: int, phone_number: str,
         await db.commit()
 
 async def get_user(user_id: int) -> Optional[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
@@ -64,12 +64,12 @@ async def get_user(user_id: int) -> Optional[Dict[str, Any]]:
             return data
 
 async def update_selected_shop(user_id: int, shop_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute("UPDATE users SET selected_shop_id = ? WHERE user_id = ?", (shop_id, user_id))
         await db.commit()
 
 async def create_task(task_id: str, user_id: int, shop_id: int, mode: str, invoice_ids: List[int], stock_id: int, target_dates: List[str], time_range: str = "ANY"):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute("""
             INSERT INTO tasks (task_id, user_id, shop_id, mode, invoice_ids_json, stock_id, target_dates_json, time_range, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'RUNNING')
@@ -77,7 +77,7 @@ async def create_task(task_id: str, user_id: int, shop_id: int, mode: str, invoi
         await db.commit()
 
 async def get_user_tasks(user_id: int, status: Optional[str] = "RUNNING") -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         query = "SELECT * FROM tasks WHERE user_id = ?"
         params = [user_id]
@@ -97,6 +97,6 @@ async def get_user_tasks(user_id: int, status: Optional[str] = "RUNNING") -> Lis
             return tasks
 
 async def update_task_status(task_id: str, status: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute("UPDATE tasks SET status = ? WHERE task_id = ?", (status, task_id))
         await db.commit()

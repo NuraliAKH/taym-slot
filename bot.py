@@ -77,39 +77,46 @@ def extract_clean_token(raw_text: str) -> str:
     """Intelligently extracts the seller access token from various user inputs."""
     text = raw_text.strip()
     
-    # Check if pasted JSON with tokens
-    if "tokens" in text or "access" in text:
+    # Check if pasted JSON with tokens or cookies
+    if any(k in text for k in ["tokens", "access", "cookie", "name", "value", "{", "["]):
         try:
             import json
             data = json.loads(text)
-            if isinstance(data, dict):
+            if isinstance(data, list):
+                # Cookie array export: [{"name": "accessToken", "value": "..."}, ...]
+                for item in data:
+                    if isinstance(item, dict) and item.get("name") in ["accessToken", "token", "access_token", "authToken", "seller_token"]:
+                        val = item.get("value")
+                        if val and len(val) > 15:
+                            return str(val).strip()
+            elif isinstance(data, dict):
                 # Check {"user": {"tokens": {"access": "..."}}}
                 acc = data.get("user", {}).get("tokens", {}).get("access")
                 if acc:
-                    return acc.strip()
+                    return str(acc).strip()
                 # Check {"tokens": {"access": "..."}}
                 acc = data.get("tokens", {}).get("access")
                 if acc:
-                    return acc.strip()
+                    return str(acc).strip()
                 # Check {"access": "..."}
-                acc = data.get("access") or data.get("accessToken") or data.get("token")
+                acc = data.get("access") or data.get("accessToken") or data.get("token") or data.get("access_token") or data.get("authToken")
                 if acc:
-                    return acc.strip()
+                    return str(acc).strip()
         except Exception:
             pass
 
-    # Check regex for accessToken => ... or token: ... or accessToken=...
+    # Check regex for cookie string or key-value (e.g. accessToken=... or token=... or "accessToken": "...")
     import re
-    m = re.search(r'(?:accessToken|access|token)\s*(?:=>|:|=)\s*["\']?([a-zA-Z0-9_\-]+)["\']?', text)
+    m = re.search(r'(?:accessToken|access_token|access|token|authToken)\s*(?:=>|:|=)\s*["\']?([a-zA-Z0-9_\-]+)["\']?', text, re.IGNORECASE)
     if m:
         candidate = m.group(1).strip()
         if len(candidate) > 15 and not candidate.startswith("eyJ"):
             return candidate
 
-    # If raw string without spaces
-    if "\n" not in text and " " not in text:
-        # Strip quotes if any
-        return text.strip('"\'')
+    # If raw string without spaces or semicolons
+    cleaned = text.strip('"\' ;\r\n\t')
+    if "\n" not in cleaned and " " not in cleaned and len(cleaned) > 15:
+        return cleaned
 
     return text
 

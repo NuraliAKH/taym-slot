@@ -130,16 +130,22 @@ class UzumClient:
         except httpx.RequestError as e:
             raise UzumApiError(f"Сетевая ошибка при загрузке накладных: {e}")
 
-    async def get_available_slots(self, shop_id: int, invoice_ids: List[int], pool_source: str = "FULLFILMENT") -> List[Dict[str, Any]]:
+    async def get_available_slots(self, shop_id: int, invoice_ids: List[int], pool_source: str = "FULLFILMENT", time_from_ms: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Queries available timeslots for specified invoices.
         POST /api/seller/shop/{shopId}/v2/invoice/time-slot/get
         """
         url = f"/api/seller/shop/{shop_id}/v2/invoice/time-slot/get"
+        if time_from_ms is None:
+            # Uzum requires timeFrom starting from tomorrow (UTC+5) for booking requests
+            now = datetime.now(UZ_TZ)
+            tomorrow_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            time_from_ms = int(tomorrow_start.timestamp() * 1000)
+
         payload = {
             "invoiceIds": invoice_ids,
             "poolSource": pool_source,
-            "timeFrom": int(time.time() * 1000)
+            "timeFrom": time_from_ms
         }
         try:
             resp = await self.client.post(url, json=payload)

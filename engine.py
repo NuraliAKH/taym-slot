@@ -90,9 +90,9 @@ class SlotTask:
                     # Filter slots by target dates and time window
                     matching_slots = []
                     for s in slots:
-                        if s["date_str"] in self.target_dates:
-                            if is_time_in_range(s["time_str"], self.time_range):
-                                matching_slots.append(s)
+                        date_matches = not self.target_dates or "ANY" in self.target_dates or s["date_str"] in self.target_dates
+                        if date_matches and is_time_in_range(s["time_str"], self.time_range):
+                            matching_slots.append(s)
 
                     if matching_slots:
                         logger.info(f"Task {self.task_id}: Found {len(matching_slots)} matching slots!")
@@ -119,7 +119,10 @@ class SlotTask:
                                     f"✅ Задача завершена."
                                 )
                                 if self.notify_callback:
-                                    await self.notify_callback(self.user_id, text, None)
+                                    try:
+                                        await self.notify_callback(self.user_id, text, None)
+                                    except Exception as notify_err:
+                                        logger.error(f"Failed to send snipe notification: {notify_err}")
                                 await self.stop(status="COMPLETED")
                                 return
                             else:
@@ -142,8 +145,11 @@ class SlotTask:
                                     f"Нажмите кнопку ниже, чтобы занять его прямо сейчас:"
                                 )
                                 if self.notify_callback:
-                                    # Pass best slot data for inline keyboard quick booking
-                                    await self.notify_callback(self.user_id, text, new_slots[:3])
+                                    try:
+                                        # Pass best slot data for inline keyboard quick booking
+                                        await self.notify_callback(self.user_id, text, new_slots[:3])
+                                    except Exception as notify_err:
+                                        logger.error(f"Failed to send slot alert notification: {notify_err}")
                 
                 except asyncio.CancelledError:
                     break
@@ -152,11 +158,14 @@ class SlotTask:
                     logger.error(f"Task {self.task_id} error ({consecutive_errors}): {e}")
                     if consecutive_errors >= 10:
                         if self.notify_callback:
-                            await self.notify_callback(
-                                self.user_id,
-                                f"⚠️ Задача #{self.task_id[:8]} приостановлена из-за повторяющихся сетевых ошибок.\n({e})",
-                                None
-                            )
+                            try:
+                                await self.notify_callback(
+                                    self.user_id,
+                                    f"⚠️ Задача #{self.task_id[:8]} приостановлена из-за повторяющихся сетевых ошибок.\n({e})",
+                                    None
+                                )
+                            except Exception:
+                                pass
                         await self.stop(status="FAILED")
                         return
 

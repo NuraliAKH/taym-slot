@@ -100,3 +100,17 @@ async def update_task_status(task_id: str, status: str):
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.execute("UPDATE tasks SET status = ? WHERE task_id = ?", (status, task_id))
         await db.commit()
+
+async def get_all_running_tasks() -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM tasks WHERE status = 'RUNNING' ORDER BY created_at ASC") as cursor:
+            rows = await cursor.fetchall()
+            tasks = []
+            for r in rows:
+                t = dict(r)
+                t["invoice_ids"] = json.loads(t["invoice_ids_json"])
+                t["target_dates"] = json.loads(t["target_dates_json"])
+                tasks.append(t)
+            return tasks
+

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
@@ -37,6 +37,9 @@ router = Router()
 
 # In-memory wizard store for temporary fast pagination
 wizard_cache: Dict[int, Dict[str, Any]] = {}
+
+# Global bot instance for background notification dispatching
+bot_instance: Optional[Bot] = None
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -377,8 +380,8 @@ async def cb_select_all_dates(cb: CallbackQuery):
         return
 
     # Add next 14 days
-    now = datetime.now()
-    data["selected_dates"] = [(now + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14)]
+    now = datetime.now(keyboards.UZ_TZ)
+    data["selected_dates"] = [(now + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14)]
     
     # Move directly to step 3
     text = (
@@ -576,7 +579,7 @@ async def cb_quick_book(cb: CallbackQuery):
         )
 
     if success:
-        dt = datetime.fromtimestamp(time_from_ms / 1000)
+        dt = datetime.fromtimestamp(time_from_ms / 1000, tz=keyboards.UZ_TZ)
         await cb.message.reply(f"🎉 **СЛОТ УСПЕШНО ЗАБРОНИРОВАН!**\n📅 {dt.strftime('%d.%m.%Y %H:%M')}\nНакладные: {invoice_ids}")
     else:
         await cb.message.reply(f"❌ Не удалось занять слот: `{msg}`", parse_mode="Markdown")
@@ -586,8 +589,9 @@ async def cb_quick_book(cb: CallbackQuery):
 async def engine_notify(user_id: int, text: str, slots_data: Optional[List[Dict[str, Any]]]):
     """Called by Engine when a slot is caught or found."""
     try:
-        bot = Bot.get_current()
+        bot = bot_instance or Bot.get_current()
         if not bot:
+            logger.error(f"Cannot send engine notification to {user_id}: bot_instance is None")
             return
         
         # If slots data provided and it's a notification, build quick booking keyboard
@@ -607,12 +611,14 @@ async def engine_notify(user_id: int, text: str, slots_data: Optional[List[Dict[
                     )
 
         await bot.send_message(chat_id=user_id, text=text, reply_markup=kb, parse_mode="Markdown")
+        logger.info(f"Successfully delivered slot notification to user {user_id}")
     except Exception as e:
         logger.error(f"Failed to send engine notification to user {user_id}: {e}")
 
 # --- Main Entry Point ---
 
 async def main():
+    global bot_instance
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN is not set in .env! Please set your Telegram bot token.")
         print("\n" + "!"*60)
@@ -624,6 +630,7 @@ async def main():
     await database.init_db()
     
     bot = Bot(token=BOT_TOKEN)
+    bot_instance = bot
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
@@ -631,7 +638,22 @@ async def main():
     engine.set_notify_callback(engine_notify)
 
     # Resume running tasks from database on startup
-    # (can be expanded if needed)
+    running_tasks = await database.get_all_running_tasks()
+    for t in running_tasks:
+        user = await database.get_user(t["user_id"])
+        if user and user.get("token"):
+            logger.info(f"Resuming active task {t['task_id'][:8]} (Mode: {t['mode']}) for user {t['user_id']}")
+            await engine.register_task(
+                task_id=t["task_id"],
+                user_id=t["user_id"],
+                token=user["token"],
+                shop_id=t["shop_id"],
+                mode=t["mode"],
+                invoice_ids=t["invoice_ids"],
+                stock_id=t["stock_id"],
+                target_dates=t["target_dates"],
+                time_range=t["time_range"]
+            )
 
     logger.info("Bot is starting polling...")
     logger.info("Uzum Timeslot Bot successfully started and listening for updates!")

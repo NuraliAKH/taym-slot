@@ -146,8 +146,14 @@ class SlotTask:
                                 )
                                 if self.notify_callback:
                                     try:
+                                        task_info = {
+                                            "task_id": self.task_id,
+                                            "shop_id": self.shop_id,
+                                            "stock_id": self.stock_id,
+                                            "invoice_ids": self.invoice_ids
+                                        }
                                         # Pass best slot data for inline keyboard quick booking
-                                        await self.notify_callback(self.user_id, text, new_slots[:3])
+                                        await self.notify_callback(self.user_id, text, new_slots[:3], task_info)
                                     except Exception as notify_err:
                                         logger.error(f"Failed to send slot alert notification: {notify_err}")
                 

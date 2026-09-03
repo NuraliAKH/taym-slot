@@ -51,7 +51,7 @@ def invoices_multiselect_keyboard(
         is_sel = inv_id in selected_ids
         mark = "☑️" if is_sel else "⬜"
         
-        slot_tag = " (есть слот)" if inv.get("has_slot") else ""
+        slot_tag = " (есть слот)" if inv.get("has_slot") else " (без слота)"
         text = f"{mark} №{inv_num} | {inv.get('total_items', 0)} шт{slot_tag}"
         rows.append([InlineKeyboardButton(text=text, callback_data=f"toggle_inv:{inv_id}:{mode}")])
     
@@ -75,6 +75,11 @@ def invoices_multiselect_keyboard(
         action_row.append(InlineKeyboardButton(
             text=f"Далее ({len(selected_ids)}) ➡️",
             callback_data=f"confirm_inv:{mode}"
+        ))
+    else:
+        action_row.append(InlineKeyboardButton(
+            text="Выберите накладную 👆",
+            callback_data="noop"
         ))
     rows.append(action_row)
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_wizard")])

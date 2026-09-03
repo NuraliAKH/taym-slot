@@ -199,6 +199,14 @@ class UzumClient:
                 try:
                     err_json = resp.json()
                     error_msg = err_json.get("message") or err_json.get("error") or str(err_json)
+                    if "errors" in err_json and isinstance(err_json["errors"], list) and err_json["errors"]:
+                        first_err = err_json["errors"][0]
+                        err_code = first_err.get("code")
+                        detail = first_err.get("detailMessage") or first_err.get("message")
+                        if err_code == "time-slot-003":
+                            error_msg = "Накладная не может быть забронирована (она уже принята на складе или не в статусе 'Создана')"
+                        elif detail:
+                            error_msg = detail
                 except Exception:
                     pass
                 return False, f"Ошибка бронирования ({resp.status_code}): {error_msg}", None

@@ -190,14 +190,21 @@ async def show_invoices(message: Message):
     wait_msg = await message.answer("⏳ Загружаем список накладных...")
     try:
         async with UzumClient(token=user["token"]) as client:
-            invoices = await client.get_invoices(shop_id=shop_id, size=30)
+            all_invoices = await client.get_invoices(shop_id=shop_id, size=50)
+
+        # Exclude accepted/archived invoices, keep only active (CREATED)
+        invoices = [inv for inv in all_invoices if inv.get("status_code") == "CREATED"]
 
         if not invoices:
-            await wait_msg.edit_text("ℹ️ У вас пока нет созданных накладных в этом магазине.")
+            await wait_msg.edit_text(
+                "ℹ️ У вас нет активных накладных в статусе **«Создана»**.\n"
+                "Все предыдущие накладные уже приняты на складе (ACCEPTED).\n\n"
+                "Создайте новую накладную в кабинете Uzum Seller для бронирования слотов."
+            )
             return
 
-        lines = [f"📋 **Список накладных (Магазин #{shop_id}):**\n"]
-        for inv in invoices[:15]:
+        lines = [f"📋 **Активные накладные (Магазин #{shop_id}):**\n"]
+        for inv in invoices:
             status = inv["status"]
             num = inv["invoice_number"] or inv["id"]
             qty = inv["total_items"]
@@ -205,7 +212,7 @@ async def show_invoices(message: Message):
                 slot = inv["slot_info"]
                 slot_str = f"🟢 Слот: `{slot['from']}`"
             else:
-                slot_str = "🔴 **Слот НЕ назначен**"
+                slot_str = "🔴 **Слот НЕ назначен (нужна бронь)**"
 
             lines.append(f"📦 **№{num}** ({qty} шт) — {status}\n   {slot_str}")
 
@@ -224,23 +231,32 @@ async def start_slot_wizard(message: Message, state: FSMContext):
     mode = "AUTO_SNIPE" if "Поймать слот" in message.text else "NOTIFY"
     shop_id = user.get("selected_shop_id")
     
-    wait_msg = await message.answer("⏳ Загружаем накладные для выбора...")
+    wait_msg = await message.answer("⏳ Загружаем активные накладные...")
     try:
         async with UzumClient(token=user["token"]) as client:
             invoices = await client.get_invoices(shop_id=shop_id, size=50)
 
-        if not invoices:
-            await wait_msg.edit_text("❌ В этом магазине нет накладных. Сначала создайте накладную в кабинете Uzum.")
+        # Filter: ONLY keep invoices in status CREATED (strictly exclude ACCEPTED at warehouse)
+        bookable_invoices = [inv for inv in invoices if inv.get("status_code") == "CREATED"]
+
+        if not bookable_invoices:
+            await wait_msg.edit_text(
+                "❌ **Нет активных накладных для бронирования.**\n\n"
+                "Бронировать слоты можно только для накладных в статусе **«Создана»** (`CREATED`).\n"
+                "Все остальные накладные уже приняты на складе (`ACCEPTED`) или закрыты.\n\n"
+                "Создайте новую накладную в кабинете Uzum Seller и запустите поиск снова.",
+                parse_mode="Markdown"
+            )
             return
 
-        # Preselect invoices without slots by default
-        default_selected = [inv["id"] for inv in invoices if not inv.get("has_slot")]
+        # No invoices selected by default: user picks desired ones
+        selected_ids: List[int] = []
 
         wizard_cache[user_id] = {
-            "invoices": invoices,
-            "selected_ids": default_selected,
+            "invoices": bookable_invoices,
+            "selected_ids": selected_ids,
             "selected_dates": [],
-            "stock_id": invoices[0]["stock_id"],
+            "stock_id": bookable_invoices[0]["stock_id"],
             "page": 0,
             "mode": mode
         }
@@ -250,12 +266,12 @@ async def start_slot_wizard(message: Message, state: FSMContext):
             f"{mode_title}\n\n"
             f"**Шаг 1 из 3:** Выберите накладные для которых нужен тайм-слот.\n"
             f"🏬 Магазин: `#{shop_id}`\n\n"
-            f"Отметьте нужные накладные галочками и нажмите **Далее**:"
+            f"Нажмите на нужные накладные, чтобы отметить их галочками, и затем нажмите **Далее**:"
         )
 
         kb = keyboards.invoices_multiselect_keyboard(
-            invoices=invoices,
-            selected_ids=default_selected,
+            invoices=bookable_invoices,
+            selected_ids=selected_ids,
             mode=mode,
             page=0
         )
@@ -342,6 +358,10 @@ async def cb_confirm_invoices(cb: CallbackQuery):
     if not data or not data["selected_ids"]:
         await cb.answer("Выберите хотя бы одну накладную!", show_alert=True)
         return
+
+    selected_invs = [inv for inv in data["invoices"] if inv["id"] in data["selected_ids"]]
+    if selected_invs:
+        data["stock_id"] = selected_invs[0]["stock_id"]
 
     text = (
         f"📅 **Шаг 2 из 3:** Выберите желаемые даты доставки.\n\n"
@@ -555,19 +575,28 @@ async def cb_auth_reenter(cb: CallbackQuery, state: FSMContext):
 
 # --- Quick Booking Callback from Notifications ---
 
-@router.callback_query(F.data.startswith("book:"))
+@router.callback_query(F.data.startswith("book:") | F.data.startswith("book_quick:"))
 async def cb_quick_book(cb: CallbackQuery):
     parts = cb.data.split(":")
+    is_quick = parts[0] == "book_quick"
     shop_id = int(parts[1])
     stock_id = int(parts[2])
     time_from_ms = int(parts[3])
-    invoice_ids = [int(x) for x in parts[4].split(",")]
 
     user_id = cb.from_user.id
     user = await database.get_user(user_id)
     if not user:
         await cb.answer("Авторизуйтесь через /start", show_alert=True)
         return
+
+    if is_quick:
+        tasks = await database.get_user_tasks(user_id, status="RUNNING")
+        if not tasks:
+            await cb.answer("Активная задача не найдена.", show_alert=True)
+            return
+        invoice_ids = tasks[0]["invoice_ids"]
+    else:
+        invoice_ids = [int(x) for x in parts[4].split(",")]
 
     await cb.answer("⚡ Бронируем слот...", show_alert=False)
     async with UzumClient(token=user["token"]) as client:
@@ -586,7 +615,7 @@ async def cb_quick_book(cb: CallbackQuery):
 
 # --- Notification Dispatcher for Engine ---
 
-async def engine_notify(user_id: int, text: str, slots_data: Optional[List[Dict[str, Any]]]):
+async def engine_notify(user_id: int, text: str, slots_data: Optional[List[Dict[str, Any]]] = None, task_info: Optional[Dict[str, Any]] = None):
     """Called by Engine when a slot is caught or found."""
     try:
         bot = bot_instance or Bot.get_current()
@@ -597,18 +626,27 @@ async def engine_notify(user_id: int, text: str, slots_data: Optional[List[Dict[
         # If slots data provided and it's a notification, build quick booking keyboard
         kb = None
         if slots_data and len(slots_data) > 0:
-            user = await database.get_user(user_id)
-            if user:
-                # Find active tasks for this user to get invoices and stock
-                tasks = await database.get_user_tasks(user_id, status="RUNNING")
-                if tasks:
-                    t = tasks[0]
-                    kb = keyboards.instant_book_keyboard(
-                        shop_id=t["shop_id"],
-                        invoice_ids=t["invoice_ids"],
-                        stock_id=t["stock_id"],
-                        slots=slots_data
-                    )
+            shop_id = task_info.get("shop_id") if task_info else None
+            invoice_ids = task_info.get("invoice_ids") if task_info else None
+            stock_id = task_info.get("stock_id") if task_info else None
+
+            if not shop_id or not invoice_ids:
+                user = await database.get_user(user_id)
+                if user:
+                    tasks = await database.get_user_tasks(user_id, status="RUNNING")
+                    if tasks:
+                        t = tasks[0]
+                        shop_id = shop_id or t["shop_id"]
+                        invoice_ids = invoice_ids or t["invoice_ids"]
+                        stock_id = stock_id or t["stock_id"]
+
+            if shop_id and invoice_ids:
+                kb = keyboards.instant_book_keyboard(
+                    shop_id=shop_id,
+                    invoice_ids=invoice_ids,
+                    stock_id=stock_id or 34,
+                    slots=slots_data
+                )
 
         await bot.send_message(chat_id=user_id, text=text, reply_markup=kb, parse_mode="Markdown")
         logger.info(f"Successfully delivered slot notification to user {user_id}")
